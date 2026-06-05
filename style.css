@@ -1,0 +1,21 @@
+.vc-fake-voice-status-button {
+    position: relative;
+}
+
+.vc-fake-voice-status-button::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    z-index: 1;
+    width: 18px;
+    height: 2px;
+    border-radius: 999px;
+    background-color: currentcolor;
+    transform: translate(-50%, -50%) rotate(-45deg);
+    pointer-events: none;
+}
+
+.vc-fake-voice-status-button[aria-pressed="true"]::before {
+    background-color: var(--status-danger, #f23f43);
+}

@@ -42,7 +42,7 @@ When inactive, the slash uses Discord's normal icon color. When active, the slas
 
 | Enabled (Fake deafened) | Disabled (Not fake deafened) |
 |---|---|
-| ![Enabled fake deafened state](assets/enabled.png) | ![Disabled not fake deafened state](assets/disabled.png) |
+| ![Enabled fake deafened microphone state](assets/enabled-microphone.png) | ![Disabled not fake deafened microphone state](assets/disabled-microphone.png) |
 
 ## How It Works
 

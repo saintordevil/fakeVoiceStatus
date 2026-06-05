@@ -38,6 +38,12 @@ Join or switch to a voice channel, then click the fake voice-status button in th
 
 When inactive, the slash uses Discord's normal icon color. When active, the slash turns red. Click the button again to restore your real voice state.
 
+## Screenshots
+
+| Enabled (Fake deafened) | Disabled (Not fake deafened) |
+|---|---|
+| ![Enabled fake deafened state](assets/enabled.png) | ![Disabled not fake deafened state](assets/disabled.png) |
+
 ## How It Works
 
 FakeVoiceStatus hooks the current Discord gateway socket while the plugin is enabled. It only rewrites outgoing voice-state opcode `4` payloads while the fake status is active.

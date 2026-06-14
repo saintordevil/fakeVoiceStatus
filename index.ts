@@ -14,6 +14,7 @@ const logger = new Logger("FakeVoiceStatus", "#7bd88f");
 
 const BUTTON_MARKER = "data-vc-fake-voice-status-button";
 const BUTTON_CLASS = "vc-fake-voice-status-button";
+const SVG_NS = "http://www.w3.org/2000/svg";
 
 interface VoiceStateRequest {
     guildId?: string | null;
@@ -184,7 +185,12 @@ function setFakeActive(active: boolean, reason: string): void {
     const synced = syncCurrentVoiceState(active);
     updateButton();
 
-    if (!synced) {
+    if (synced) {
+        logger.info(active
+            ? `enabled and synced (${reason})`
+            : `disabled and synced (${reason})`
+        );
+    } else {
         logger.info(active
             ? `enabled, waiting for a voice channel (${reason})`
             : `disabled (${reason})`
@@ -275,6 +281,9 @@ function updateButton(): void {
     button.setAttribute("aria-label", getButtonLabel());
     button.setAttribute("aria-pressed", String(active));
     button.title = getButtonLabel();
+
+    const slash = button.querySelector<SVGPathElement>(".vc-fake-voice-status-icon-slash");
+    slash?.setAttribute("stroke", active ? "var(--status-danger, #f23f43)" : "currentColor");
 }
 
 function ensureButton(): void {
@@ -293,7 +302,7 @@ function ensureButton(): void {
     button.type = "button";
     button.className = `${controls.source.className} ${BUTTON_CLASS}`;
     button.setAttribute(BUTTON_MARKER, "true");
-    button.appendChild(cloneButtonContents(controls.source));
+    button.appendChild(createFakeVoiceIcon());
     button.addEventListener("click", event => {
         event.preventDefault();
         event.stopPropagation();
@@ -305,21 +314,32 @@ function ensureButton(): void {
     updateButton();
 }
 
-function cloneButtonContents(source: HTMLButtonElement): DocumentFragment {
-    const fragment = document.createDocumentFragment();
+function createFakeVoiceIcon(): SVGSVGElement {
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("class", "vc-fake-voice-status-icon");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("width", "20");
+    svg.setAttribute("height", "20");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2.4");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
 
-    for (const child of Array.from(source.childNodes)) {
-        fragment.appendChild(child.cloneNode(true));
-    }
+    const micBody = document.createElementNS(SVG_NS, "path");
+    micBody.setAttribute("d", "M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z");
 
-    if (!fragment.childNodes.length) throw new Error("Discord mute button contents not found");
+    const micStand = document.createElementNS(SVG_NS, "path");
+    micStand.setAttribute("d", "M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8");
 
-    for (const element of Array.from(fragment.querySelectorAll<HTMLElement>("[id], [aria-describedby]"))) {
-        element.removeAttribute("id");
-        element.removeAttribute("aria-describedby");
-    }
+    const slash = document.createElementNS(SVG_NS, "path");
+    slash.setAttribute("class", "vc-fake-voice-status-icon-slash");
+    slash.setAttribute("d", "M4 4l16 16");
 
-    return fragment;
+    svg.append(micBody, micStand, slash);
+    return svg;
 }
 
 function queueButtonRefresh(): void {

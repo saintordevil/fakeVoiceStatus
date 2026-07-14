@@ -1,73 +1,59 @@
 # Vencord: Fake Voice Status
 
-Discord voice-status control for Vencord: show yourself as muted and deafened while your local microphone and audio stay unchanged.
+FakeVoiceStatus adds a native-looking user-panel toggle that reports you as muted and deafened without changing your local microphone, headphones, or camera state.
 
-FakeVoiceStatus adds a native-looking button to Discord's user panel. When enabled, it reports a muted and deafened voice state to Discord while leaving your real local input and output behavior alone.
+## What it does
 
-## Core Behavior
+- Reports `self_mute` and `self_deaf` as enabled while the toggle is active.
+- Leaves local microphone input and audio output unchanged.
+- Preserves the real `self_video` value in every rewritten voice-state update.
+- Restores the real voice state before removing its gateway hook.
+- Reconnects safely after Discord replaces or reconnects the gateway socket.
+- Fails closed if a safe gateway hook cannot be installed, so the button never claims to be active when it is not.
 
-| Feature | What it does | How |
-|---|---|---|
-| **Fake Mute and Deafen** | Shows you as muted and deafened to others | Sends voice-state updates with `self_mute` and `self_deaf` enabled |
-| **Local Audio Preserved** | Keeps your real microphone and headset behavior unchanged | Reads local media state only when restoring the real voice state |
-| **User-Panel Button** | Adds a button beside Discord's voice controls | Uses Discord's own microphone button styling |
-| **Native Control Placement** | Keeps Discord's real input and output dropdowns on the real controls | Inserts after the headset output picker when Discord exposes one |
-| **No Visible Settings** | Uses one direct toggle instead of extra options | Stores only the hidden active state for cleanup |
-
-## Requirements
-
-- A working [Vencord](https://vencord.dev) development setup
-- Discord desktop
-- `pnpm`, as used by Vencord
-
-## Install
-
-1. Set up [Vencord](https://vencord.dev) if you have not already.
-2. Copy the `fakeVoiceStatus` folder into your Vencord `src/userplugins/` directory.
-3. Rebuild Vencord:
-
-```bash
-pnpm build
-```
-
-4. Enable **FakeVoiceStatus** in Discord Settings > Vencord > Plugins.
-
-## Usage
-
-Join or switch to a voice channel, then click the fake voice-status button in the bottom-left user panel.
-
-When inactive, the slash uses Discord's normal icon color. When active, the slash turns red. Click the button again to restore your real voice state.
+The slash on the button turns red while the fake state is active. Click it again to restore the voice state Discord should actually receive.
 
 ## Screenshots
 
-| Enabled (Fake deafened) | Disabled (Not fake deafened) |
-|---|---|
-| ![Enabled fake deafened microphone state](assets/enabled-microphone.png) | ![Disabled not fake deafened microphone state](assets/disabled-microphone.png) |
+| Enabled | Disabled |
+| --- | --- |
+| ![Fake voice status enabled](assets/enabled-microphone.png) | ![Fake voice status disabled](assets/disabled-microphone.png) |
 
-## How It Works
+## Install
 
-FakeVoiceStatus hooks the current Discord gateway socket while the plugin is enabled. It only rewrites outgoing voice-state opcode `4` payloads while the fake status is active.
+This repository is the complete Vencord userplugin folder.
 
-The plugin does not patch `WebSocket.prototype`, does not add global keybind listeners, and does not use external update checks. The socket patch is restored when the plugin stops.
+1. Clone or copy the repository directly to `src/userplugins/fakeVoiceStatus` inside a Vencord checkout.
+2. From the Vencord root, run `pnpm build`.
+3. Inject or reinstall that Vencord build using your normal development workflow.
+4. Restart Discord, then enable **FakeVoiceStatus** in Settings > Vencord > Plugins.
 
-## Technical Details
+## How it works
 
-- Plugin name: `FakeVoiceStatus`
-- Author: `saint`
-- Uses Vencord's `definePlugin`
-- Uses a hidden `fakeActive` setting for cleanup across restarts
-- Uses a `MutationObserver` to add the user-panel button
-- Clones Discord's native microphone button contents for visual consistency
-- Uses CSS to draw the slash overlay and make it red while active
-- Does not call external network endpoints
-- Does not read tokens, cookies, local storage, or message content
+The plugin patches only the current Discord gateway socket's voice-state send path, and only while the fake state is active. Outgoing voice-state opcode `4` payloads keep their guild, channel, and real camera state while mute and deafen are reported as enabled.
 
-## Notes
+When the toggle is disabled or the plugin stops, FakeVoiceStatus first sends the real mute, deafen, and camera values, then restores the original socket method. A `CONNECTION_OPEN` listener safely re-establishes the patch and resynchronizes the state after a gateway reconnect.
 
-- This plugin changes the voice state Discord receives, not your local device state
-- Discord internals can change, so the gateway or user-panel button logic may need updates after Discord releases
-- Disable the plugin from Vencord's plugin list to remove the button and restore the real voice state
+The observer watches Discord's app root, while button discovery is restricted to the user-panel selector. Every injected button and observer is removed during cleanup.
+
+## Privacy and scope
+
+- No external requests or update checks.
+- No token, cookie, message, or local-storage access.
+- No global `WebSocket.prototype` patch.
+- No mouse, keyboard, or clipboard automation.
+- The plugin changes the voice state reported to Discord. It does not alter local device controls.
+
+## Compatibility notes
+
+Discord's internal gateway and user-panel structure can change. If the button no longer appears or voice-state updates stop working after a Discord release, update Vencord and rebuild before reporting an issue.
+
+## Project details
+
+- Plugin: `FakeVoiceStatus`
+- Author: `saintordevil`
+- License: GPL-3.0-or-later
 
 ## License
 
-MIT
+Licensed under the [GNU General Public License v3.0 or later](LICENSE).

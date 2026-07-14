@@ -1,3 +1,9 @@
+/*
+ * Vencord, a Discord client mod
+ * Copyright (c) 2026 Vendicated and contributors
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 import "./style.css";
 
 import { definePluginSettings } from "@api/Settings";
@@ -14,6 +20,7 @@ const logger = new Logger("FakeVoiceStatus", "#7bd88f");
 
 const BUTTON_MARKER = "data-vc-fake-voice-status-button";
 const BUTTON_CLASS = "vc-fake-voice-status-button";
+const PANELS_SELECTOR = '[class^="panels_"], [class*=" panels_"]';
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 interface VoiceStateRequest {
@@ -25,6 +32,8 @@ interface VoiceStateRequest {
     self_mute?: boolean;
     selfDeaf?: boolean;
     self_deaf?: boolean;
+    selfVideo?: boolean;
+    self_video?: boolean;
 }
 
 interface GatewayVoiceStatePayload {
@@ -32,6 +41,7 @@ interface GatewayVoiceStatePayload {
     channel_id: string | null;
     self_mute: boolean;
     self_deaf: boolean;
+    self_video: boolean;
     [key: string]: unknown;
 }
 
@@ -40,6 +50,7 @@ interface GatewaySocket {
 }
 
 type RestorePatch = () => void;
+type VoiceSyncResult = "sent" | "not-connected" | "failed";
 
 const settings = definePluginSettings({
     fakeActive: {
@@ -98,6 +109,14 @@ function getActualSelfDeaf(): boolean {
     }
 }
 
+function getActualSelfVideo(): boolean {
+    try {
+        return Boolean(MediaEngineStore?.isVideoEnabled?.() ?? false);
+    } catch {
+        return false;
+    }
+}
+
 function getCurrentVoiceTarget(): Pick<GatewayVoiceStatePayload, "guild_id" | "channel_id"> | null {
     const channelId = SelectedChannelStore?.getVoiceChannelId?.() ?? null;
     if (!channelId) return null;
@@ -121,6 +140,7 @@ function buildPayload(request: VoiceStateRequest, fake: boolean): GatewayVoiceSt
         channel_id: request.channel_id ?? request.channelId ?? null,
         self_mute: fake ? true : actualMute,
         self_deaf: fake ? true : actualDeaf,
+        self_video: readBool(request.self_video ?? request.selfVideo, getActualSelfVideo()),
     };
 }
 
@@ -137,18 +157,23 @@ function sendVoiceState(payload: GatewayVoiceStatePayload): boolean {
     }
 }
 
-function syncCurrentVoiceState(fake: boolean): boolean {
-    const target = getCurrentVoiceTarget();
-    if (!target) return false;
+function syncCurrentVoiceState(fake: boolean): VoiceSyncResult {
+    try {
+        const target = getCurrentVoiceTarget();
+        if (!target) return "not-connected";
 
-    return sendVoiceState(buildPayload(target, fake));
+        return sendVoiceState(buildPayload(target, fake)) ? "sent" : "failed";
+    } catch (e) {
+        logger.warn("could not read the current voice state", e);
+        return "failed";
+    }
 }
 
-function installSocketPatch(): void {
+function installSocketPatch(): boolean {
     try {
         const socket = getGatewaySocket();
-        if (!socket || typeof socket.send !== "function") return;
-        if (restoreSocketPatch && patchedSocket === socket) return;
+        if (!socket || typeof socket.send !== "function") return false;
+        if (restoreSocketPatch && patchedSocket === socket) return true;
 
         restoreSocketPatch?.();
 
@@ -171,39 +196,70 @@ function installSocketPatch(): void {
             if (patchedSocket === socket) patchedSocket = null;
             restoreSocketPatch = null;
         };
+        return true;
     } catch (e) {
         logger.warn("gateway send hook unavailable", e);
+        patchedSocket = null;
+        restoreSocketPatch = null;
+        return false;
+    }
+}
+
+function restoreSocketHook(reason: string): void {
+    try {
+        restoreSocketPatch?.();
+    } catch (e) {
+        logger.warn(`gateway send hook restore failed (${reason})`, e);
         patchedSocket = null;
         restoreSocketPatch = null;
     }
 }
 
 function setFakeActive(active: boolean, reason: string): void {
-    settings.store.fakeActive = active;
-    if (active) installSocketPatch();
+    if (active && !installSocketPatch()) {
+        settings.store.fakeActive = false;
+        updateButton();
+        logger.warn(`could not enable because the gateway hook is unavailable (${reason})`);
+        return;
+    }
 
-    const synced = syncCurrentVoiceState(active);
+    settings.store.fakeActive = active;
+
+    const syncResult = syncCurrentVoiceState(active);
+    if (!active) restoreSocketHook(reason);
     updateButton();
 
-    if (synced) {
+    if (syncResult === "sent") {
         logger.info(active
             ? `enabled and synced (${reason})`
             : `disabled and synced (${reason})`
         );
-    } else {
+    } else if (syncResult === "not-connected") {
         logger.info(active
             ? `enabled, waiting for a voice channel (${reason})`
             : `disabled (${reason})`
+        );
+    } else {
+        logger.warn(active
+            ? `enabled, but the current voice state could not be synced (${reason})`
+            : `disabled, but the current voice state could not be restored (${reason})`
         );
     }
 }
 
 function resyncIfActive(reason: string): void {
     if (!isFakeActive()) return;
-    installSocketPatch();
-    syncCurrentVoiceState(true);
+    if (!installSocketPatch()) {
+        settings.store.fakeActive = false;
+        updateButton();
+        logger.warn(`saved active state was reset because the gateway hook is unavailable (${reason})`);
+        return;
+    }
+
+    const syncResult = syncCurrentVoiceState(true);
     updateButton();
-    logger.info(`resynced (${reason})`);
+    if (syncResult === "failed") logger.warn(`could not resync the current voice state (${reason})`);
+    else logger.info(syncResult === "sent" ? `resynced (${reason})` : `waiting for a voice channel (${reason})`);
 }
 
 function normalizeLabel(button: HTMLButtonElement): string {
@@ -245,22 +301,28 @@ function findDeafenInsertTarget(parent: HTMLElement, deafenButton: HTMLButtonEle
 }
 
 function findAudioControls(): { parent: HTMLElement; source: HTMLButtonElement; insertAfter: HTMLButtonElement; } | null {
-    const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>("button[aria-label]"));
+    const panels = Array.from(document.querySelectorAll<HTMLElement>(PANELS_SELECTOR));
 
-    for (const button of buttons) {
-        const parent = button.parentElement;
-        if (!parent || parent.querySelector<HTMLButtonElement>(`button[${BUTTON_MARKER}]`)) continue;
+    for (const panel of panels) {
+        const buttons = Array.from(panel.querySelectorAll<HTMLButtonElement>("button[aria-label]"))
+            .filter(button => !button.hasAttribute(BUTTON_MARKER));
 
-        const siblingButtons = Array.from(parent.querySelectorAll<HTMLButtonElement>("button[aria-label]"));
-        const deafenButton = siblingButtons.find(isDeafenButton);
-        const muteButton = siblingButtons.find(isMuteButton);
+        for (const button of buttons) {
+            const parent = button.parentElement;
+            if (!parent) continue;
 
-        if (deafenButton && muteButton) {
-            return {
-                parent,
-                source: muteButton,
-                insertAfter: findDeafenInsertTarget(parent, deafenButton),
-            };
+            const siblingButtons = Array.from(parent.querySelectorAll<HTMLButtonElement>("button[aria-label]"))
+                .filter(sibling => !sibling.hasAttribute(BUTTON_MARKER));
+            const deafenButton = siblingButtons.find(isDeafenButton);
+            const muteButton = siblingButtons.find(isMuteButton);
+
+            if (deafenButton && muteButton) {
+                return {
+                    parent,
+                    source: muteButton,
+                    insertAfter: findDeafenInsertTarget(parent, deafenButton),
+                };
+            }
         }
     }
 
@@ -274,29 +336,30 @@ function getButtonLabel(): string {
 }
 
 function updateButton(): void {
-    const button = document.querySelector<HTMLButtonElement>(`button[${BUTTON_MARKER}]`);
-    if (!button) return;
-
     const active = isFakeActive();
-    button.setAttribute("aria-label", getButtonLabel());
-    button.setAttribute("aria-pressed", String(active));
-    button.title = getButtonLabel();
+    const label = getButtonLabel();
 
-    const slash = button.querySelector<SVGPathElement>(".vc-fake-voice-status-icon-slash");
-    slash?.setAttribute("stroke", active ? "var(--status-danger, #f23f43)" : "currentColor");
+    for (const button of document.querySelectorAll<HTMLButtonElement>(`button[${BUTTON_MARKER}]`)) {
+        button.setAttribute("aria-label", label);
+        button.setAttribute("aria-pressed", String(active));
+        button.title = label;
+
+        const slash = button.querySelector<SVGPathElement>(".vc-fake-voice-status-icon-slash");
+        slash?.setAttribute("stroke", active ? "var(--status-danger, #f23f43)" : "currentColor");
+    }
 }
 
 function ensureButton(): void {
     if (!pluginRunning) return;
 
-    const existing = document.querySelector<HTMLButtonElement>(`button[${BUTTON_MARKER}]`);
+    const controls = findAudioControls();
+    if (!controls) return;
+
+    const existing = controls.parent.querySelector<HTMLButtonElement>(`button[${BUTTON_MARKER}]`);
     if (existing) {
         updateButton();
         return;
     }
-
-    const controls = findAudioControls();
-    if (!controls) return;
 
     const button = document.createElement("button");
     button.type = "button";
@@ -359,11 +422,12 @@ function queueButtonRefresh(): void {
 
 function startButtonObserver(): void {
     if (panelObserver) return;
-    if (!document.body) return;
+    const observerRoot = document.getElementById("app-mount") ?? document.body;
+    if (!observerRoot) return;
 
     queueButtonRefresh();
     panelObserver = new MutationObserver(queueButtonRefresh);
-    panelObserver.observe(document.body, { childList: true, subtree: true });
+    panelObserver.observe(observerRoot, { childList: true, subtree: true });
 }
 
 function stopButtonObserver(): void {
@@ -374,41 +438,48 @@ function stopButtonObserver(): void {
     refreshQueued = false;
     panelObserver?.disconnect();
     panelObserver = null;
-    document.querySelector<HTMLButtonElement>(`button[${BUTTON_MARKER}]`)?.remove();
+    document.querySelectorAll<HTMLButtonElement>(`button[${BUTTON_MARKER}]`).forEach(button => button.remove());
 }
 
 export default definePlugin({
     name: "FakeVoiceStatus",
     description: "Adds a user-panel button that shows you as muted and deafened to others without changing local audio.",
-    authors: [],
+    authors: [{
+        name: "saintordevil",
+        id: 0n,
+    }],
 
     settings,
+
+    flux: {
+        CONNECTION_OPEN() {
+            resyncIfActive("gateway connection open");
+        },
+    },
 
     start() {
         pluginRunning = true;
         try {
-            installSocketPatch();
             startButtonObserver();
-            if (isFakeActive()) resyncIfActive("plugin start");
         } catch (e) {
-            logger.warn("startup recovered after a non-fatal error", e);
+            logger.warn("user-panel control failed to start", e);
         }
+        if (isFakeActive()) resyncIfActive("plugin start");
         logger.info("started");
     },
 
     stop() {
+        const wasActive = isFakeActive();
+        settings.store.fakeActive = false;
         try {
-            if (isFakeActive()) syncCurrentVoiceState(false);
-            settings.store.fakeActive = false;
+            if (wasActive && syncCurrentVoiceState(false) === "failed") {
+                logger.warn("could not restore the current voice state during stop");
+            }
         } catch (e) {
             logger.warn("stop sync failed", e);
         }
         pluginRunning = false;
-        try {
-            restoreSocketPatch?.();
-        } catch (e) {
-            logger.warn("gateway send hook restore failed", e);
-        }
+        restoreSocketHook("plugin stop");
         stopButtonObserver();
         logger.info("stopped");
     },
